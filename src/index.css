@@ -1,0 +1,188 @@
+/* ---------- base ---------- */
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+:root{
+  --msu-green:#18453B;
+  --msu-green-dark:#0f3027;
+  --bg:#f6f7f8;
+  --card:#ffffff;
+  --text:#111827;
+  --muted:#6b7280;
+  --border:#e5e7eb;
+  --accent:#22c55e;
+  --warn:#fbbf24;
+  --danger:#b91c1c;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  line-height: 1.35;
+}
+
+/* ---------- layout ---------- */
+.container{
+  width: 100%;
+  max-width: none;           /* fill screen */
+  padding: 16px 24px;        /* page gutters */
+  margin: 0 auto;
+}
+
+.layout-two-col{
+  display: grid;
+  grid-template-columns: 2fr 1fr;  /* main / sidebar */
+  gap: 16px;
+}
+
+@media (max-width: 1100px){
+  .layout-two-col{ grid-template-columns: 1fr; }
+}
+
+/* ---------- cards & common ---------- */
+.card{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.04);
+}
+
+.row{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wrap{ flex-wrap: wrap; }
+
+.grid{
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.sidebar{ position: sticky; top: 16px; align-self: start; }
+
+/* ---------- tables ---------- */
+table{
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+th, td{
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+thead th{
+  font-weight: 700;
+  font-size: 0.9rem;
+  background: #fafafa;
+}
+tbody tr:hover{
+  background: #fafcff;
+}
+.mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+
+/* ---------- badges / chips ---------- */
+.badge{
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #fff;
+  background: var(--msu-green);
+}
+
+/* ---------- inputs & buttons ---------- */
+input, select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  color: var(--text);
+  outline: none;
+}
+input:focus, select:focus{
+  border-color: var(--msu-green);
+  box-shadow: 0 0 0 3px rgba(24,69,59,.15);
+}
+
+button{
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+button:hover{ background: #fafafa; }
+button:disabled{
+  opacity: .55;
+  cursor: not-allowed;
+}
+button.primary{
+  border-color: var(--msu-green);
+  background: var(--msu-green);
+  color: #fff;
+}
+button.primary:hover{ filter: brightness(1.05); }
+button.ghost{
+  background: transparent;
+  border-color: var(--border);
+}
+button.warn{
+  border-color: var(--warn);
+  color: #92400e;
+  background: #fffbeb;
+}
+button.danger{
+  border-color: var(--danger);
+  color: var(--danger);
+  background: #fff5f5;
+}
+
+/* ---------- header polish ---------- */
+header{
+  background: var(--msu-green) !important;
+  border-color: var(--msu-green-dark) !important;
+}
+header h1{ color: #fff; }
+header p{ color: #e8f5ee; }
+
+/* ---------- scroll areas ---------- */
+[style*="overflowX"]{
+  /* make horizontal areas breathe a bit */
+  padding-bottom: 4px;
+}
+
+/* Smaller buttons only inside the Team Stats card */
+.card.teamstats button {
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  border-radius: 6px;
+}
+
+/* ---------- Flash feedback for any button ---------- */
+@keyframes flash-success {
+  0%   { background-color: var(--msu-green); color: #fff; }
+  50%  { background-color: var(--msu-green-dark); color: #fff; }
+  100% { background-color: #fff; color: var(--text); }
+}
+
+button.flash-success {
+  animation: flash-success 0.5s ease;
+}
+
+/* smaller clock adjust buttons */
+.clock-adjust button {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  border-radius: 8px;
+}
