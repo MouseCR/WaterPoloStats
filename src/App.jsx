@@ -79,14 +79,15 @@ export default function App() {
   const [periodLenSec, setPeriodLenSec] = useState(restored?.periodLenSec ?? 8*60);
   const [gameStarted, setGameStarted] = useState(restored?.gameStarted ?? false);
   const [gameEnded, setGameEnded] = useState(restored?.gameEnded ?? false);
-
+  const [timeoutSetup, setTimeoutSetup] = useState(restored?.timeoutSetup ?? { full: 2, short: 1 });
+  const [timeoutsRemaining, setTimeoutsRemaining] = useState(restored?.timeoutsRemaining ?? null);
 
   /* CSV import mode: true = merge/update, false = replace */
   const [importAppend, setImportAppend] = useState(true);
 
   /* ---------- runtime ---------- */
   const [timeouts, setTimeouts] = useState(
-    restored?.timeouts ?? { msu: { short: 1, full: 2 }, opp: { short: 1, full: 2 } }
+    restored?.timeouts ?? { msu: { short: 1, full: 4 }, opp: { short: 1, full: 4 } }
   );
   const [timeoutLog, setTimeoutLog] = useState(restored?.timeoutLog ?? []);
   const [clock, setClock]         = useState(restored?.clock ?? fmtMMSS(periodLenSec));
@@ -254,14 +255,15 @@ export default function App() {
       setupSwimOffId,
       teamStats,
       situations,
-      timeouts,   
-      timeoutLog,
+      timeoutSetup,
+      timeoutsRemaining,
       savedAt: Date.now()
     });
   }, [opponent, period, periodLenSec, gameStarted, gameEnded, clock, roster, log, activeIds, timePlayed,
       swimWins, swimLosses, lastEventSec, betweenPeriods, swimOffForPeriod,
-      setupStarters, setupSwimOffId, teamStats, situations, notes, timeouts, timeoutLog]);
+      setupStarters, setupSwimOffId, teamStats, situations, notes, timeouts, timeoutLog, timeoutSetup, timeoutsRemaining]);
 
+      
   /* ---------- CSV import (merge/replace) ---------- */
   function importRosterCSV(file) {
     if (!file) return;
@@ -337,14 +339,6 @@ export default function App() {
   /* ---------- event logging ---------- */
   function addEvent(playerId, type) {
     if (betweenPeriods || !gameStarted || gameEnded) return;
-    /* ---------- clock adjust helpers ---------- */
-    function incrementClock(secDelta) {
-      const s = parseClockMMSS(clock);
-      if (s == null) return;
-      const next = Math.max(0, Math.min(periodLenSec, s + secDelta));
-      setClock(fmtMMSS(next));
-      setLastEventSec(next);
-    }
 
     // Extra metadata for certain events
     let extra = {};
@@ -355,6 +349,9 @@ export default function App() {
       if (cleaned) extra.oppScorer = cleaned;
     }
 
+    // 🔹 Snapshot who is currently in the water
+    const lineup = [...activeIds];
+
     setLog(prev => [
       ...prev,
       {
@@ -364,6 +361,7 @@ export default function App() {
         clock,
         playerId,
         type,
+        lineup,   // now this is defined
         ...extra,
       },
     ]);
@@ -410,8 +408,17 @@ export default function App() {
     setSituations({ manUp: false, manDown: false });
     setSwimOffForPeriod({ period: 1, playerId: setupSwimOffId || null, winner: null });
     setShowSwimWarn(false);
-    setTimeouts({ msu: { short: 1, full: 2 }, opp: { short: 1, full: 2 } });
+    setTimeouts({
+      msu: { short: timeoutSetup.short, full: timeoutSetup.full },
+      opp: { short: timeoutSetup.short, full: timeoutSetup.full }
+    });
     setTimeoutLog([]);
+    setTimeoutsRemaining({
+      msuFull: Math.max(0, Number(timeoutSetup.msuFull) || 0),
+      msuShort: Math.max(0, Number(timeoutSetup.msuShort) || 0),
+      oppFull: Math.max(0, Number(timeoutSetup.oppFull) || 0),
+      oppShort: Math.max(0, Number(timeoutSetup.oppShort) || 0),
+    });
   }
 
   /* ---------- swim-off winner buttons during period ---------- */
@@ -607,7 +614,7 @@ export default function App() {
     const mins = Math.max(1, Math.round(periodLenSec / 60));
     const lenSec = mins * 60;
     if (clearRoster) setRoster(DEFAULT_ROSTER);
-
+    setTimeoutsRemaining(null);
     setOpponent("");
     setPeriod(1);
     setPeriodLenSec(lenSec);
@@ -691,7 +698,10 @@ export default function App() {
         assists: 0, steals: 0, turnovers: 0, exclusions: 0, forcedExclusions: 0,
         timePlayedSec: timePlayed[p.id] || 0,
         swimWins: swimWins[p.id] || 0,
-        swimLosses: swimLosses[p.id] || 0
+        swimLosses: swimLosses[p.id] || 0,
+        pmFor: 0,        // goals for while on pool
+        pmAgainst: 0,    // goals against while on pool
+        pmNet: 0,   
       };
     });
     log.forEach(e => {
@@ -710,6 +720,23 @@ export default function App() {
         case "forced_exclusion": p.forcedExclusions++; break;
         default: break;
       }
+      // 2) Plus/minus for everyone who was in the water
+      const lineup = Array.isArray(e.lineup) ? e.lineup : [];
+      if (lineup.length) {
+        if (e.type === "goal") {
+          // Our goal: +1 for everyone in lineup
+          lineup.forEach(id => {
+            const lp = s[id];
+            if (lp) lp.pmFor++;
+          });
+        } else if (e.type === "goal_against") {
+          // Goal against us: +1 against for everyone in lineup
+          lineup.forEach(id => {
+            const lp = s[id];
+            if (lp) lp.pmAgainst++;
+          });
+        }
+      }
     });
     Object.values(s).forEach(p => {
       if (p.pos === "GK") {
@@ -718,6 +745,7 @@ export default function App() {
       } else {
         p.shotPct = pct(p.goals, p.attempts);
       }
+      p.pmNet = p.pmFor - p.pmAgainst;
     });
     return Object.values(s);
   }, [roster, log, timePlayed, swimWins, swimLosses]);
@@ -725,6 +753,53 @@ export default function App() {
   const goalies  = stats.filter(p => p.pos === "GK");
   const fielders = stats.filter(p => p.pos !== "GK");
 
+  const totalsField = useMemo(() => {
+    const t = {
+      timePlayedSec: 0,
+      goals: 0, attempts: 0, assists: 0, steals: 0, turnovers: 0,
+      exclusions: 0, forcedExclusions: 0, blocks: 0,
+      swimWins: 0, swimLosses: 0,
+    };
+    fielders.forEach(p => {
+      t.timePlayedSec += p.timePlayedSec || 0;
+      t.goals        += p.goals || 0;
+      t.attempts     += p.attempts || 0;
+      t.assists      += p.assists || 0;
+      t.steals       += p.steals || 0;
+      t.turnovers    += p.turnovers || 0;
+      t.exclusions   += p.exclusions || 0;
+      t.forcedExclusions += p.forcedExclusions || 0;
+      t.blocks       += p.blocks || 0;
+      t.swimWins     += p.swimWins || 0;
+      t.swimLosses   += p.swimLosses || 0;
+    });
+    return { ...t, shotPct: pct(t.goals, t.attempts) };
+  }, [fielders]);
+
+  const totalsGK = useMemo(() => {
+    const t = {
+      timePlayedSec: 0,
+      goalsAgainst: 0,
+      saves: 0,
+      penaltyBlocks: 0,
+      assists: 0, steals: 0, turnovers: 0,
+      exclusions: 0, forcedExclusions: 0,
+    };
+    goalies.forEach(p => {
+      t.timePlayedSec += p.timePlayedSec || 0;
+      t.goalsAgainst  += p.goalsAgainst || 0;
+      t.saves         += p.saves || 0;
+      t.penaltyBlocks += p.penaltyBlocks || 0;
+      t.assists       += p.assists || 0;
+      t.steals        += p.steals || 0;
+      t.turnovers     += p.turnovers || 0;
+      t.exclusions    += p.exclusions || 0;
+      t.forcedExclusions += p.forcedExclusions || 0;
+    });
+    const faced = t.saves + t.goalsAgainst;
+    return { ...t, savePct: pct(t.saves, faced) };
+  }, [goalies]);
+  
   /* ---------- CSV ---------- */
   function downloadCSV(filename, rows) {
     const blob = new Blob([rows.join("\n")], { type: "text/csv" });
@@ -733,99 +808,116 @@ export default function App() {
     a.download = filename;
     a.click();
   }
-  function exportPlayersCSV() {
-    const header = "Number,Name,Pos,Active,TimePlayed,SwimWins,SwimLosses,Goals,Attempts,Shot%,Assists,Steals,Turnovers,Exclusions,ForcedExcl,Blocks,GoalsAgainst,Saves,Save%,PenaltyBlocks";
-    const rows = [header];
+// ---- One-click: export everything as a ZIP of CSVs (Excel-friendly) ----
+  async function exportAllZip() {
+    // Lazy-load jszip so your main bundle stays small
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
 
-    fielders.forEach(p => {
-      const isActive = activeIds.includes(p.id) ? "Y" : "N";
-      rows.push([
-        p.number, p.name, p.pos, isActive,
+    const oppSafe = (opponent || "opponent").replace(/[^a-z0-9]+/gi, "_");
+    const today = new Date().toISOString().slice(0,10);
+
+    // Excel-friendly CSVs work better with a BOM
+    const bom = '\uFEFF';
+
+    const csv = (rows) => bom + rows.join("\n");
+
+    // ---- Team Totals (Field Players) ----
+    const fieldTotalsRows = [
+      "TimePlayed,Goals,Attempts,Shot%,Assists,Steals,Turnovers,Exclusions,ForcedExcl,Blocks,SwimWins,SwimLosses",
+      [
+        fmtMMSS(totalsField.timePlayedSec),
+        totalsField.goals, totalsField.attempts, totalsField.shotPct,
+        totalsField.assists, totalsField.steals, totalsField.turnovers,
+        totalsField.exclusions, totalsField.forcedExclusions, totalsField.blocks,
+        totalsField.swimWins, totalsField.swimLosses
+      ].join(",")
+    ];
+    zip.file("team_totals_field.csv", csv(fieldTotalsRows));
+
+    // ---- Team Totals (Goalkeepers) ----
+    const gkTotalsRows = [
+      "TimePlayed,GoalsAgainst,Saves,Save%,PenaltyBlocks,Assists,Steals,Turnovers,Exclusions,ForcedExcl",
+      [
+        fmtMMSS(totalsGK.timePlayedSec),
+        totalsGK.goalsAgainst, totalsGK.saves, totalsGK.savePct, totalsGK.penaltyBlocks,
+        totalsGK.assists, totalsGK.steals, totalsGK.turnovers, totalsGK.exclusions, totalsGK.forcedExclusions
+      ].join(",")
+    ];
+    zip.file("team_totals_goalies.csv", csv(gkTotalsRows));
+
+    // ---- Team Situations ----
+    const teamSituationsRows = [
+      "ManUp_Attempts,ManUp_Goals,ManUp_Stops,ManDown_Defenses,ManDown_Stops,ManDown_GA,PenFor_Attempts,PenFor_Goals,PenFor_Misses,PenAg_Attempts,PenAg_Saves,PenAg_GA",
+      [
+        teamStats.manUp.attempts, teamStats.manUp.goals, teamStats.manUp.stops,
+        teamStats.manDown.defenses, teamStats.manDown.stops, teamStats.manDown.goalsAgainst,
+        teamStats.penFor.attempts, teamStats.penFor.goals, teamStats.penFor.misses,
+        teamStats.penAgainst.attempts, teamStats.penAgainst.saves, teamStats.penAgainst.goalsAgainst
+      ].join(",")
+    ];
+    zip.file("team_situations.csv", csv(teamSituationsRows));
+
+    // ---- Goals Against by Opponent Cap # ----
+    const gaRows = [];
+    if (gaOppKeys.length) {
+      gaRows.push(["Cap#", ...gaOppKeys].join(","));
+      gaRows.push(["GA", ...gaOppKeys.map(k => gaByOpp[k])].join(","));
+    } else {
+      gaRows.push("No opponent cap numbers recorded");
+    }
+    zip.file("goals_against_cap.csv", csv(gaRows));
+
+    // ---- Field Players (detail) ----
+    const fieldRows = [
+      "Number,Name,TimePlayed,Goals,Attempts,Shot%,Assists,Steals,Turnovers,Exclusions,ForcedExcl,Blocks,SwimWins,SwimLosses",
+      ...fielders.map(p => [
+        p.number,
+        String(p.name || "").replace(/,/g, " "),
         fmtMMSS(p.timePlayedSec),
-        p.swimWins, p.swimLosses,
         p.goals, p.attempts, p.shotPct,
-        p.assists, p.steals, p.turnovers, p.exclusions, p.forcedExclusions,
-        p.blocks
-      ].join(","));
-    });
+        p.assists, p.steals, p.turnovers,
+        p.exclusions, p.forcedExclusions, p.blocks,
+        p.swimWins, p.swimLosses
+      ].join(","))
+    ];
+    zip.file("field_players.csv", csv(fieldRows));
 
+    // ---- Goalkeepers (detail) ----
+    const gkRows = [
+      "Number,Name,Pos,Active,TimePlayed,GoalsAgainst,Saves,Save%,PenaltyBlocks,Assists,Steals,Turnovers,Exclusions,ForcedExcl",
+      ...goalies.map(p => {
+        const isActive = activeIds.includes(p.id) ? "Y" : "N";
+        return [
+          p.number,
+          String(p.name || "").replace(/,/g, " "),
+          p.pos,
+          isActive,
+          fmtMMSS(p.timePlayedSec),
+          p.goalsAgainst, p.saves, p.savePct, p.penaltyBlocks,
+          p.assists, p.steals, p.turnovers, p.exclusions, p.forcedExclusions
+        ].join(",");
+      })
+    ];
+    zip.file("goalkeepers.csv", csv(gkRows));
 
-    const opp = (opponent || "opponent").replace(/[^a-z0-9]+/gi, "_");
-    const date = new Date().toISOString().slice(0,10);
-    downloadCSV(`wp_players_${date}_${opp}.csv`, rows);
+    // ---- Optional: meta summary ----
+    const metaRows = [
+      "Michigan State Water Polo — Export",
+      `Date,${new Date().toISOString()}`,
+      `Opponent,${(opponent || "opponent").replace(/,/g, " ")}`,
+      `QuarterLength,${fmtMMSS(periodLenSec)}`
+    ];
+    zip.file("meta.csv", csv(metaRows));
+
+    // Build + download ZIP
+    const blob = await zip.generateAsync({ type: "blob" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `wp_export_${today}_${oppSafe}.zip`;
+    a.click();
   }
 
-  function exportTeamCSV() {
-    const rows = [];
-
-    // Meta
-    rows.push("Date,Opponent,PeriodLengthSec,CurrentPeriod,GameStarted,GameEnded");
-    rows.push([
-      new Date().toISOString().slice(0,10),
-      `"${opponent.replace(/"/g,'""')}"`,
-      periodLenSec,
-      period,
-      gameStarted ? "Y" : "N",
-      gameEnded ? "Y" : "N"
-    ].join(","));
-    rows.push("");
-
-    // Team Stats
-    rows.push("Team Stats");
-    rows.push("ManUp_Attempts,ManUp_Goals,ManUp_Stops,ManDown_Defenses,ManDown_Stops,ManDown_GA,PenFor_Attempts,PenFor_Goals,PenFor_Misses,PenAg_Attempts,PenAg_Saves,PenAg_GA");
-    rows.push([
-      teamStats.manUp.attempts, teamStats.manUp.goals, teamStats.manUp.stops,
-      teamStats.manDown.defenses, teamStats.manDown.stops, teamStats.manDown.goalsAgainst,
-      teamStats.penFor.attempts, teamStats.penFor.goals, teamStats.penFor.misses,
-      teamStats.penAgainst.attempts, teamStats.penAgainst.saves, teamStats.penAgainst.goalsAgainst
-    ].join(","));
-    rows.push("");
-
-    // Timeouts (if you added them)
-    if (typeof timeouts !== "undefined") {
-      rows.push("Timeouts");
-      rows.push("Team,30s,Full");
-      rows.push(["MSU", timeouts.msu.short, timeouts.msu.full].join(","));
-      rows.push(["Opponent", timeouts.opp.short, timeouts.opp.full].join(","));
-      rows.push("");
-    }
-
-    // Notes (optional)
-    if (typeof notes !== "undefined" && notes) {
-      rows.push("Notes");
-      rows.push(`"${String(notes).replace(/"/g,'""')}"`);
-      rows.push("");
-    }
-
-    const opp = (opponent || "opponent").replace(/[^a-z0-9]+/gi, "_");
-    const date = new Date().toISOString().slice(0,10);
-    downloadCSV(`wp_team_${date}_${opp}.csv`, rows);
-  }
-  function exportGoaliesCSV() {
-    const header = "Number,Name,TimePlayed,GA,Saves,Save%,PK Blocks,Assists,Steals,Turnovers,Exclusions,ForcedExcl";
-    const rows = [header];
-
-    goalies.forEach(g => {
-      rows.push([
-        g.number,
-        g.name,
-        fmtMMSS(g.timePlayedSec),
-        g.goalsAgainst,
-        g.saves,
-        g.savePct,
-        g.penaltyBlocks,
-        g.assists,
-        g.steals,
-        g.turnovers,
-        g.exclusions,
-        g.forcedExclusions
-      ].join(","));
-    });
-
-    const opp = (opponent || "opponent").replace(/[^a-z0-9]+/gi, "_");
-    const date = new Date().toISOString().slice(0,10);
-    downloadCSV(`wp_goalies_${date}_${opp}.csv`, rows);
-  }
 
 
   /* ---------- render ---------- */
@@ -868,6 +960,42 @@ export default function App() {
                      onChange={e=>setSetupMinutes(e.target.value)} />
             </div>
           </div>
+          {/* Timeouts */}
+          <div className="card" style={{ marginTop: 12 }}>
+            <div className="row" style={{ gap: 12, marginTop: 8, flexWrap: 'wrap' }}>
+              <label className="row" style={{ gap: 6 }}>
+                <span>Full</span>
+                <input
+                  type="number"
+                  min={0}
+                  style={{ width: 90 }}
+                  value={timeoutSetup.full}
+                  onChange={(e) =>
+                    setTimeoutSetup((s) => ({
+                      ...s,
+                      full: Math.max(0, Number(e.target.value) || 0),
+                    }))
+                  }
+                />
+              </label>
+              <label className="row" style={{ gap: 6 }}>
+                <span>30s</span>
+                <input
+                  type="number"
+                  min={0}
+                  style={{ width: 90 }}
+                  value={timeoutSetup.short}
+                  onChange={(e) =>
+                    setTimeoutSetup((s) => ({
+                      ...s,
+                      short: Math.max(0, Number(e.target.value) || 0),
+                    }))
+                  }
+                />
+              </label>
+            </div>
+          </div>
+
 
           {/* Roster editor */}
           <div className="card" style={{marginTop:12}}>
@@ -951,9 +1079,7 @@ export default function App() {
           <strong>Game Final</strong>
           <p style={{opacity:.8, marginTop:6}}>All controls are closed. Review your stats below or export a CSV.</p>
           <div className="row" style={{gap:8, marginTop:8}}>
-            <button className="primary" onClick={exportPlayersCSV}>Export Players CSV</button>
-            <button onClick={exportGoaliesCSV}>Export Goalies CSV</button>
-            <button onClick={exportTeamCSV}>Export Team CSV</button>
+            <button className="primary" onClick={exportAllZip}>Export All</button>
             <button onClick={()=>newGame()} title="Return to Start Game and keep roster">
               New Game
             </button>
@@ -975,7 +1101,9 @@ export default function App() {
               <div className="card" style={{ marginTop: 10, background:'#f8fafc' }}>
                 <div className="row" style={{ justifyContent:'space-between', alignItems:'baseline' }}>
                   <strong>Timeouts</strong>
-                  <span style={{opacity:.8}}>Track 1×30s + 2×Full per team</span>
+                  <span style={{opacity:.8}}>
+                    Track {timeoutSetup.short}×30s + {timeoutSetup.full}×Full per team
+                  </span>
                 </div>
 
                 <div className="row wrap" style={{ gap: 12, marginTop: 8 }}>
@@ -1138,9 +1266,7 @@ export default function App() {
                   <>
                     <button onClick={startSubstitution} disabled={gameEnded}>Start Substitution</button>
                     <button onClick={endPeriod} disabled={gameEnded} title="Attribute remaining time then advance period">End Period</button>
-                    <button className="primary" onClick={exportPlayersCSV}>Export Players CSV</button>
-                    <button onClick={exportGoaliesCSV}>Export Goalies CSV</button>
-                    <button onClick={exportTeamCSV}>Export Team CSV</button>
+                    <button className="primary" onClick={exportAllZip}>Export All</button>
                     <button onClick={endGame} title="Close the game and lock controls" style={{borderColor:'#991b1b', color:'#991b1b'}}>End Game</button>
                   </>
                 ) : (
@@ -1430,6 +1556,7 @@ export default function App() {
                         <th>G</th><th>Att</th><th>Shot%</th>
                         <th>Ast</th><th>Stl</th><th>TO</th>
                         <th>EX</th><th>F-EX</th><th>Blk</th>
+                        <th>+/-</th>
                         <th>SwimW</th><th>SwimL</th>
                       </tr>
                     </thead>
@@ -1454,6 +1581,7 @@ export default function App() {
                             <td align="center">{p.exclusions}</td>
                             <td align="center">{p.forcedExclusions}</td>
                             <td align="center">{p.blocks}</td>
+                            <td align="center">{p.pmNet}</td>
                             <td align="center">{p.swimWins}</td>
                             <td align="center">{p.swimLosses}</td>
                           </tr>
@@ -1504,6 +1632,31 @@ export default function App() {
                   </table>
                 </div>
               </div>
+        {/* ---------- TEAM TOTALS SUMMARY ---------- */}
+        <div className="card" style={{
+          marginTop: 16,
+          background: '#f4f4f4',
+          padding: '16px',
+          borderRadius: '12px',
+          textAlign: 'center',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+        }}>
+          <h3 style={{marginBottom: 12, color: '#18453B'}}>Team Totals</h3>
+          <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '12px', justifyItems: 'center'}}>
+            <div><strong>Goals:</strong> {totalsField.goals}</div>
+            <div><strong>Attempts:</strong> {totalsField.attempts}</div>
+            <div><strong>Shot %:</strong> {totalsField.shotPct}</div>
+            <div><strong>Blocks:</strong> {totalsField.blocks}</div>
+            <div><strong>Assists:</strong> {totalsField.assists}</div>
+            <div><strong>Steals:</strong> {totalsField.steals}</div>
+            <div><strong>Turnovers:</strong> {totalsField.turnovers}</div>
+            <div><strong>Exclusions:</strong> {totalsField.exclusions}</div>
+            <div><strong>Forced Excl:</strong> {totalsField.forcedExclusions}</div>
+            <div><strong>Swim Wins:</strong> {totalsField.swimWins}</div>
+            <div><strong>Swim Losses:</strong> {totalsField.swimLosses}</div>
+            <div><strong>Total Save %:</strong> {totalsGK.savePct}</div>
+          </div>
+        </div>
 
               {/* Goals Against by opponent number */}
               {gaOppKeys.length > 0 && (
